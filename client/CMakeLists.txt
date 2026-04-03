@@ -16,7 +16,8 @@ FetchContent_MakeAvailable(ftxui)
 
 add_executable(chat_cli
   src/main.cpp
-  src/GeneralChat.cpp
+  src/generalChat/GeneralChat.cpp
+  src/help/HelpScreen.cpp
 )
 
 target_link_libraries(chat_cli PRIVATE
