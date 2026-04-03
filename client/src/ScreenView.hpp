@@ -4,6 +4,7 @@
 // Pantallas con las que se trabaja:
 enum class ScreenView {
     GeneralChat,
+    PrivateChat,
     Help
 };
 
