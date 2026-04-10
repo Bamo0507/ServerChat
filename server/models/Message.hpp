@@ -13,6 +13,7 @@ enum class MessageType {
     Status,
     Info,
     GetAll,
+    GetUsers,
     Exit,
     Unknown
 };
