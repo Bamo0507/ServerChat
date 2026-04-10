@@ -55,7 +55,14 @@ Actualmente, el servidor implementa una base funcional que permite:
 Se pueden enviar mensajes de prueba con formato:
 
 ```
+REGISTER|<usuario>
 CHAT|<usuario>|<mensaje>
+PRIVATE|<usuario>|<usuario_destino>|<mensaje>
+STATUS|<usuario>|<nuevo_estado>
+INFO|<usuario>|<usuario_destino>
+GETUSERS|<usuario>
+GETALL|<usuario>
+EXIT|<usuario>
 ```
 
 Ejemplo:
@@ -64,6 +71,29 @@ Ejemplo:
 CHAT|Bryan|Hola
 ```
 
+#### Tipos de respuesta del servidor:
+Register:
+- OK|REGISTER
+Chat:
+- PUBLIC_MSG|<usuario_emisor>|<mensaje>
+Private:
+- PRIVATE_MSG|<usuario_emisor1>|<usuario_destino1>|<mensaje1>
+- PRIVATE_MSG|<usuario_emisor2>|<usuario_destino2>|<mensaje2>
+- ... (20)
+Status:
+- OK|STATUS
+Info:
+- INFO|<usuario_destino>|ip_address|<estado_destino>|
+GetUsers:
+- USERINFO|<usuario1>|<estado1>|BoolPrivateChat1
+- USERINFO|<usuario2>|<estado2>|BoolPrivateChat2
+- ... (5)
+GetAll:
+- PUBLIC_MSG|<usuario_emisor1>|<mensaje1>
+- PUBLIC_MSG|<usuario_emisor2>|<mensaje2>
+- ... (50)
+Exit:
+- OK|EXIT
 ---
 
 ## Decisiones de conectividad

@@ -295,7 +295,7 @@ static void* handleClient(void* arg) {
                     pthread_mutex_lock(&clients_mutex);
                     for (int i = 0; i < 50; i++) {
                         if (BroadCastMessages[i].type == MessageType::ChatPublic) {
-                            server_response += MessageSerializer::buildBroadcastMessage(
+                            server_response += MessageSerializer::buildPublicMessage(
                                 BroadCastMessages[i].sender,
                                 BroadCastMessages[i].content
                             ) + "\n";

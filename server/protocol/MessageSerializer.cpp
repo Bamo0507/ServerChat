@@ -48,12 +48,7 @@ std::string MessageSerializer::buildUserInfo(
     return "USER_INFO|" + username + "|" + status + "|" + (in_private_chat ? "true" : "false");
 }
 
-std::string MessageSerializer::buildBroadcastMessage(
-    const std::string& sender,
-    const std::string& content
-) {
-    return "BROADCAST|" + sender + "|" + content;
-}
+
 // TODO: Implementar serializers adicionales cuando se agreguen más
 // respuestas del servidor al protocolo.
 // - mensajes privados
