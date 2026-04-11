@@ -14,8 +14,7 @@ public:
     static std::string buildPrivateMessage(
         const std::string& username,
         const std::string& target,
-        const std::string& status
-        //bool in_private_chat
+        const std::string& content
     );
     static std::string buildInfoResponse(
         const std::string& username,
@@ -31,17 +30,6 @@ public:
         const std::string& sender,
         const std::string& content
     );
-    // static std::string buildPrivateMessage(const std::string& sender, const std::string& target, const std::string& content) {
-    //     return "PRIVATE|" + sender + "|" + target + "|" + content;
-    // }
-
-
-    // TODO: Agregar serializers adicionales conforme se implementen
-    // nuevas interacciones del protocolo, por ejemplo:
-    // - buildPrivateMessage(...)
-    // - buildUserListResponse(...)
-    // - buildUserInfoResponse(...)
-    // - buildStatusUpdateResponse(...)
 };
 
 #endif
