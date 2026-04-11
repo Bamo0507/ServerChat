@@ -7,16 +7,12 @@
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
-<<<<<<< server-responses
 #include <pthread.h>
 #include <sstream>
-=======
->>>>>>> main
 
 #include "../models/Message.hpp"
 #include "../protocol/MessageParser.hpp"
 #include "../protocol/MessageSerializer.hpp"
-<<<<<<< server-responses
 #include "../models/ClientSession.hpp"
 #include "../models/Private.hpp"
 
@@ -25,14 +21,11 @@
 #define MAX_CLIENTS 5
 #define MAX_PRIVATE_CONVOS (MAX_CLIENTS * (MAX_CLIENTS - 1) / 2)  // 10 para 5 clientes
 
-=======
->>>>>>> main
 
 ChatServer::ChatServer(int port)
     : server_port(port), server_socket_file_descriptor(-1) {
 }
 
-<<<<<<< server-responses
 Message BroadCastMessages[BUFFER_SIZE];
 int broadcast_count = 0;
 
@@ -124,8 +117,6 @@ struct ClientThreadArgs {
     sockaddr_in address;
 };
 
-=======
->>>>>>> main
 bool ChatServer::start() {
     std::cout << "Inicializando servidor en el puerto " << server_port << std::endl;
 
@@ -164,7 +155,6 @@ bool ChatServer::start() {
     return true;
 }
 
-<<<<<<< server-responses
 static void* handleClient(void* arg) {
     ClientThreadArgs* args = static_cast<ClientThreadArgs*>(arg);
     int client_socket_file_descriptor = args->socket_fd;
@@ -172,28 +162,6 @@ static void* handleClient(void* arg) {
     delete args; // free heap allocation made in run()
 
     while (true) {
-=======
-void ChatServer::run() {
-    std::cout << "Servidor listo para aceptar conexiones..." << std::endl;
-
-    while (true) {
-        sockaddr_in client_address{};
-        socklen_t client_address_length = sizeof(client_address);
-
-        int client_socket_file_descriptor = accept(
-            server_socket_file_descriptor,
-            reinterpret_cast<sockaddr*>(&client_address),
-            &client_address_length
-        );
-
-        if (client_socket_file_descriptor < 0) {
-            std::cerr << "Error: no se pudo aceptar la conexión del cliente." << std::endl;
-            continue;
-        }
-
-        std::cout << "Cliente conectado correctamente." << std::endl;
-
->>>>>>> main
         char receive_buffer[1024];
         std::memset(receive_buffer, 0, sizeof(receive_buffer));
 
@@ -213,7 +181,6 @@ void ChatServer::run() {
 
             switch (parsed_message.type) {
                 case MessageType::Register:
-<<<<<<< server-responses
                     pthread_mutex_lock(&clients_mutex);
                     trim_newlines(parsed_message.sender);
                     if (connected_count < MAX_CLIENTS) {
@@ -253,17 +220,10 @@ void ChatServer::run() {
                         }
                         BroadCastMessages[BUFFER_SIZE - 1] = parsed_message;
                     }
-=======
-                    server_response = MessageSerializer::buildOkResponse("REGISTER") + "\n";
-                    break;
-
-                case MessageType::ChatPublic:
->>>>>>> main
                     server_response = MessageSerializer::buildPublicMessage(
                         parsed_message.sender,
                         parsed_message.content
                     ) + "\n";
-<<<<<<< server-responses
                     pthread_mutex_unlock(&clients_mutex);
                     break;
 
@@ -422,28 +382,16 @@ void ChatServer::run() {
                     }
                     server_response = MessageSerializer::buildOkResponse("EXIT") + "\n";
                     pthread_mutex_unlock(&clients_mutex);
-=======
-                    break;
-
-                case MessageType::Exit:
-                    server_response = MessageSerializer::buildOkResponse("EXIT") + "\n";
->>>>>>> main
                     break;
 
                 // TODO: Agregar manejo explícito para otros tipos de mensaje
                 // conforme se implementen más interacciones del protocolo.
                 // Casos previstos para esta sección:
                 // - MessageType::ChatPrivate
-<<<<<<< server-responses
                 // - MessageType::Status -> DONE
                 // - MessageType::Info -> DONE
                 // - MessageType::GetAll -> DONE
                 // - MessageType::GetUsers -> DONE
-=======
-                // - MessageType::Status
-                // - MessageType::Info
-                // - MessageType::GetAll
->>>>>>> main
                 // La idea es que cada caso construya su respuesta utilizando
                 // MessageSerializer y mantenga la lógica del servidor organizada.
                 case MessageType::Unknown:
@@ -469,7 +417,6 @@ void ChatServer::run() {
             std::cout << "Respuesta enviada al cliente: " << server_response << std::endl;
         } else {
             std::cerr << "Error o conexión cerrada sin datos." << std::endl;
-<<<<<<< server-responses
             // Find and remove the client from ConnectedClients
             for (int i = 0; i < connected_count; i++) {
                 if (ConnectedClients[i].socket_fd == client_socket_file_descriptor) {
@@ -520,11 +467,6 @@ void ChatServer::run() {
 
         // Detach so resources are freed automatically when the thread finishes
         pthread_detach(thread_id);
-=======
-        }
-
-        close(client_socket_file_descriptor);
->>>>>>> main
     }
 }
 

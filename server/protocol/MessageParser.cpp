@@ -26,10 +26,7 @@ MessageType parseMessageType(const string& command_text) {
     if (command_text == "STATUS") return MessageType::Status;
     if (command_text == "INFO") return MessageType::Info;
     if (command_text == "GETALL") return MessageType::GetAll;
-<<<<<<< server-responses
     if (command_text == "GETUSERS") return MessageType::GetUsers;
-=======
->>>>>>> main
     if (command_text == "EXIT") return MessageType::Exit;
 
     return MessageType::Unknown;
@@ -79,7 +76,6 @@ Message MessageParser::parse(const string& raw_message) {
             break;
 
         case MessageType::Info:
-<<<<<<< server-responses
             if (message_parts.size() >= 3) {
                 message.sender = message_parts[1];
                 message.content = message_parts[2];
@@ -88,9 +84,6 @@ Message MessageParser::parse(const string& raw_message) {
 
         case MessageType::GetAll:
         case MessageType::GetUsers:
-=======
-        case MessageType::GetAll:
->>>>>>> main
         case MessageType::Exit:
             if (message_parts.size() >= 2) {
                 message.sender = message_parts[1];

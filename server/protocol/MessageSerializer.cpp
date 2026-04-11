@@ -22,7 +22,6 @@ std::string MessageSerializer::buildServerWarning(const std::string& content) {
     return "SERVER_WARN|" + content;
 }
 
-<<<<<<< server-responses
 std::string MessageSerializer::buildPrivateMessage(
     const std::string& username,
     const std::string& target,
@@ -50,8 +49,6 @@ std::string MessageSerializer::buildUserInfo(
 }
 
 
-=======
->>>>>>> main
 // TODO: Implementar serializers adicionales cuando se agreguen más
 // respuestas del servidor al protocolo.
 // - mensajes privados
