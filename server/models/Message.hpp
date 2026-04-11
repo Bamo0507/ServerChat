@@ -13,7 +13,10 @@ enum class MessageType {
     Status,
     Info,
     GetAll,
+<<<<<<< server-responses
     GetUsers,
+=======
+>>>>>>> main
     Exit,
     Unknown
 };
