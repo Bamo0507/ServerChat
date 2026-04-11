@@ -22,6 +22,36 @@ std::string MessageSerializer::buildServerWarning(const std::string& content) {
     return "SERVER_WARN|" + content;
 }
 
+<<<<<<< server-responses
+std::string MessageSerializer::buildPrivateMessage(
+    const std::string& username,
+    const std::string& target,
+    const std::string& status
+    //bool in_private_chat
+) {
+    return "PRIVATE_MSG|" + username + "|" + target + "|" + status ;
+    //+ "|" + (in_private_chat ? "true" : "false")
+}
+
+std::string MessageSerializer::buildInfoResponse(
+    const std::string& username,
+    const std::string& ip_address,
+    const std::string& status
+) {
+    return "INFO|" + username + "|" + ip_address + "|" + status;
+}
+
+std::string MessageSerializer::buildUserInfo(
+    const std::string& username,
+    const std::string& status,
+    bool in_private_chat
+) {
+    return "USER_INFO|" + username + "|" + status + "|" + (in_private_chat ? "true" : "false");
+}
+
+
+=======
+>>>>>>> main
 // TODO: Implementar serializers adicionales cuando se agreguen más
 // respuestas del servidor al protocolo.
 // - mensajes privados
