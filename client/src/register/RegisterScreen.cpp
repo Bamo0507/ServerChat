@@ -5,10 +5,9 @@
 using namespace ftxui;
 
 Element RegisterScreen(
-    const std::string& username_input,
-    const std::string& server_ip_input,
-    const std::string& server_port_input,
-    Element active_input_element,
+    Element username_input_element,
+    Element server_ip_input_element,
+    Element server_port_input_element,
     const std::string& helper_message
 ) {
     Element title_box = vbox({
@@ -23,34 +22,26 @@ Element RegisterScreen(
     Element username_box = vbox({
         text("Username") | bold,
         separator(),
-        text(username_input.empty() ? " " : username_input)
+        username_input_element
     }) |
     border |
-    size(HEIGHT, EQUAL, 4);
+    size(HEIGHT, EQUAL, 5);
 
     Element server_ip_box = vbox({
         text("IP del servidor") | bold,
         separator(),
-        text(server_ip_input.empty() ? " " : server_ip_input)
+        server_ip_input_element
     }) |
     border |
-    size(HEIGHT, EQUAL, 4);
+    size(HEIGHT, EQUAL, 5);
 
     Element server_port_box = vbox({
         text("Puerto") | bold,
         separator(),
-        text(server_port_input.empty() ? " " : server_port_input)
+        server_port_input_element
     }) |
     border |
-    size(HEIGHT, EQUAL, 4);
-
-    Element active_input_box = vbox({
-        text("Campo activo") | bold,
-        separator(),
-        active_input_element
-    }) |
-    border |
-    size(HEIGHT, EQUAL, 4);
+    size(HEIGHT, EQUAL, 5);
 
     Element footer_box = vbox({
         filler(),
@@ -65,7 +56,6 @@ Element RegisterScreen(
         username_box,
         server_ip_box,
         server_port_box,
-        active_input_box,
         footer_box
     }) | yflex;
 }

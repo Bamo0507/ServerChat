@@ -19,6 +19,8 @@ add_executable(chat_cli
   src/generalChat/GeneralChat.cpp
   src/help/HelpScreen.cpp
   src/privateChat/PrivateChat.cpp
+  src/network/ChatClient.cpp
+  src/register/RegisterScreen.cpp
 )
 
 target_link_libraries(chat_cli PRIVATE
