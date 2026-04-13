@@ -125,6 +125,15 @@ static int findSocketByUsername(const std::string& username) {
     return -1;
 }
 
+static int findSocketByIP(const std::string& ip_address) {
+    for (int client_index = 0; client_index < connected_client_count; client_index++) {
+        if (connected_clients[client_index].ip_address == ip_address) {
+            return connected_clients[client_index].socket_fd;
+        }
+    }
+    return -1;
+}
+
 // Elimina saltos de línea y espacios del inicio y final de un texto recibido.
 static void trimLineBreaksAndSpaces(std::string& text) {
     while (!text.empty() &&
@@ -237,6 +246,22 @@ static void* handleClient(void* raw_thread_arguments) {
                         trimLineBreaksAndSpaces(parsed_client_message.sender);
 
                         if (connected_client_count < MAX_CLIENTS) {
+                            if (findSocketByUsername(parsed_client_message.sender) != -1) {
+                                server_response_message = MessageSerializer::buildErrorResponse(
+                                    "REGISTER",
+                                    "USERNAME_TAKEN"
+                                ) + "\n";
+                                pthread_mutex_unlock(&clients_mutex);
+                                break;
+                            }
+                            if (findSocketByIP(inet_ntoa(client_address.sin_addr)) != -1) {
+                                server_response_message = MessageSerializer::buildErrorResponse(
+                                    "REGISTER",
+                                    "COMPUTER_CONNECTED"
+                                ) + "\n";
+                                pthread_mutex_unlock(&clients_mutex);
+                                break;
+                            }
                             connected_clients[connected_client_count++] = {
                                 .socket_fd = client_socket_file_descriptor,
                                 .username = parsed_client_message.sender,
