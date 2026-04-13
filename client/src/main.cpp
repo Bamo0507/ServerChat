@@ -284,9 +284,33 @@ int main() {
                 continue;
             }
 
+            // INFO|username|ip|status — respuesta al comando /info
+            if (response_line.rfind(info_prefix, 0) == 0) {
+                std::vector<std::string> parts;
+                std::stringstream line_stream(response_line);
+                std::string current_part;
+
+                while (std::getline(line_stream, current_part, '|')) {
+                    parts.push_back(current_part);
+                }
+
+                if (parts.size() >= 4) {
+                    std::string info_username = parts[1];
+                    std::string info_ip       = parts[2];
+                    std::string info_status   = map_server_status_to_display_status(parts[3]);
+                    server_notifications.push_back(
+                        "/SERVER " + info_username +
+                        " — IP: " + info_ip +
+                        ", Estado: " + info_status
+                    );
+                } else {
+                    server_notifications.push_back("/SERVER " + response_line);
+                }
+                continue;
+            }
+
             if (response_line.rfind(ok_prefix, 0) == 0 ||
-                response_line.rfind(error_prefix, 0) == 0 ||
-                response_line.rfind(info_prefix, 0) == 0) {
+                response_line.rfind(error_prefix, 0) == 0) {
 
                 if (response_line == "OK|STATUS") {
                     std::string status_label = last_requested_display_status.empty()
@@ -789,6 +813,26 @@ int main() {
                 }
 
                 send_status_update(requested_status);
+                command_input.clear();
+                return true;
+            }
+
+            if (current_view == ScreenView::GeneralChat &&
+                command_input.rfind("/info ", 0) == 0 &&
+                active_chat_client) {
+                std::string target = command_input.substr(6);
+
+                while (!target.empty() && target.front() == ' ') {
+                    target.erase(target.begin());
+                }
+                while (!target.empty() && target.back() == ' ') {
+                    target.pop_back();
+                }
+
+                if (!target.empty()) {
+                    active_chat_client->sendInfoRequest(current_username, target);
+                }
+
                 command_input.clear();
                 return true;
             }

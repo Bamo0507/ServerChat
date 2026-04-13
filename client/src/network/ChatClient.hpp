@@ -35,6 +35,7 @@ public:
                                    const std::string& target,
                                    const std::string& content);
     bool sendGetPrivateRequest(const std::string& username, const std::string& target);
+    bool sendInfoRequest(const std::string& username, const std::string& target);
     bool sendExitRequest(const std::string& username);
 
 private:

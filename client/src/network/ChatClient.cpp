@@ -229,6 +229,10 @@ bool ChatClient::sendGetPrivateRequest(
     return ensureConnectedAndSend("GETPRIVATE|" + username + "|" + target);
 }
 
+bool ChatClient::sendInfoRequest(const std::string& username, const std::string& target) {
+    return ensureConnectedAndSend("INFO|" + username + "|" + target);
+}
+
 bool ChatClient::sendExitRequest(const std::string& username) {
     return ensureConnectedAndSend("EXIT|" + username);
 }
