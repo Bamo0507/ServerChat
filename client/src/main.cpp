@@ -1,6 +1,11 @@
+#include <atomic>
 #include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ftxui/component/component.hpp>
@@ -24,9 +29,7 @@ enum class RegisterField {
 
 int main() {
     std::vector<UserItem> users = {
-        {"Bryan", "Activo", false},
-        {"Adriana", "Ocupado", true},
-        {"Brandon", "Inactivo", false}
+        {"Sin usuarios conectados", "-", false}
     };
 
     std::vector<std::string> server_messages = {
@@ -52,32 +55,136 @@ int main() {
     std::string current_username;
     std::string current_server_ip;
     int current_server_port = 0;
+    std::unique_ptr<ChatClient> active_chat_client;
 
-    // Durante el registro reutilizamos command_input como buffer del campo activo,
-    // igual que en el chat. Así dejamos que FTXUI renderice y capture el texto.
+    std::mutex shared_state_mutex;
+    std::atomic<bool> keep_listening = false;
+    std::thread server_listener_thread;
+    std::atomic<bool> awaiting_public_messages_refresh = false;
+    std::atomic<bool> awaiting_users_refresh = false;
+    std::string last_requested_display_status;
+
     std::string command_input;
+
+    // Indica que hay un intento de registro en curso en un hilo de fondo.
+    // Mientras sea true, el evento de Enter en el formulario se ignora.
+    std::atomic<bool> registration_in_progress = false;
 
     ScreenView current_view = ScreenView::GeneralChat;
     HelpOrigin help_origin = HelpOrigin::General;
 
     auto screen = ScreenInteractive::TerminalOutput();
 
+    auto request_server_response = [&](const std::function<bool()>& send_request_action) -> std::string {
+        if (!active_chat_client) {
+            return "ERROR|CLIENT|NOT_CONNECTED";
+        }
+
+        if (!send_request_action()) {
+            return "ERROR|CLIENT|SEND_FAILED";
+        }
+
+        return active_chat_client->receiveMessage();
+    };
+
+    auto map_server_status_to_display_status = [](const std::string& server_status) -> std::string {
+        if (server_status == "online") {
+            return "ACTIVO";
+        }
+
+        if (server_status == "away") {
+            return "OCUPADO";
+        }
+
+        if (server_status == "offline") {
+            return "INACTIVO";
+        }
+
+        return server_status;
+    };
+
+    auto map_display_status_to_server_status = [](const std::string& display_status) -> std::string {
+        if (display_status == "ACTIVO") {
+            return "online";
+        }
+
+        if (display_status == "OCUPADO") {
+            return "away";
+        }
+
+        if (display_status == "INACTIVO") {
+            return "offline";
+        }
+
+        return "";
+    };
+
     auto refresh_public_messages = [&]() {
-        if (current_username.empty() || current_server_ip.empty() || current_server_port <= 0) {
+        if (current_username.empty() || !active_chat_client) {
             return;
         }
 
-        ChatClient chat_client(current_server_ip, current_server_port);
-        std::string server_response = chat_client.getAllMessages(current_username);
+        awaiting_public_messages_refresh = true;
 
-        if (server_response.rfind("ERROR|", 0) == 0) {
-            server_messages = {
-                "/SERVER No se pudieron refrescar los mensajes: " + server_response
+        if (!active_chat_client->sendGetAllRequest(current_username)) {
+            awaiting_public_messages_refresh = false;
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            server_messages.push_back("/SERVER No se pudieron refrescar los mensajes.");
+            return;
+        }
+    };
+
+    auto refresh_connected_users = [&]() {
+        if (current_username.empty() || !active_chat_client) {
+            return;
+        }
+
+        awaiting_users_refresh = true;
+
+        if (!active_chat_client->sendGetUsersRequest(current_username)) {
+            awaiting_users_refresh = false;
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            users = {
+                {"Error cargando usuarios", "-", false}
             };
             return;
         }
+    };
 
-        std::vector<std::string> refreshed_messages;
+    auto refresh_initial_data = [&]() {
+        refresh_public_messages();
+        refresh_connected_users();
+    };
+
+    auto handle_server_response = [&](const std::string& server_response) {
+        if (server_response.rfind("ERROR|CLIENT|", 0) == 0) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            server_messages.push_back("/SERVER " + server_response);
+            return;
+        }
+
+        bool response_is_empty = true;
+        for (char current_character : server_response) {
+            if (current_character != ' ' &&
+                current_character != '\n' &&
+                current_character != '\r' &&
+                current_character != '\t') {
+                response_is_empty = false;
+                break;
+            }
+        }
+
+        if (response_is_empty) {
+            return;
+        }
+
+        std::vector<std::string> refreshed_public_messages;
+        std::vector<UserItem> refreshed_users;
+        std::vector<std::string> server_notifications;
+        bool contains_public_messages = false;
+        bool contains_user_info = false;
+        bool should_refresh_users_after_status_update = false;
+
         std::istringstream response_stream(server_response);
         std::string response_line;
 
@@ -87,55 +194,238 @@ int main() {
             }
 
             const std::string public_message_prefix = "PUBLIC_MSG|";
-            if (response_line.rfind(public_message_prefix, 0) != 0) {
+            const std::string user_info_prefix = "USER_INFO|";
+            const std::string server_warning_prefix = "SERVER_WARN|";
+            const std::string ok_prefix = "OK|";
+            const std::string error_prefix = "ERROR|";
+            const std::string info_prefix = "INFO|";
+
+            if (response_line.rfind(public_message_prefix, 0) == 0) {
+                std::size_t sender_separator_index = response_line.find('|', public_message_prefix.size());
+                if (sender_separator_index == std::string::npos) {
+                    continue;
+                }
+
+                std::string sender = response_line.substr(
+                    public_message_prefix.size(),
+                    sender_separator_index - public_message_prefix.size()
+                );
+                std::string content = response_line.substr(sender_separator_index + 1);
+
+                if (sender.empty()) {
+                    sender = "SERVER";
+                }
+
+                if (content.empty()) {
+                    content = "(sin contenido)";
+                }
+
+                refreshed_public_messages.push_back("/" + sender + " " + content);
+                contains_public_messages = true;
                 continue;
             }
 
-            std::size_t sender_separator_index = response_line.find('|', public_message_prefix.size());
-            if (sender_separator_index == std::string::npos) {
+            if (response_line.rfind(user_info_prefix, 0) == 0) {
+                std::vector<std::string> parts;
+                std::stringstream line_stream(response_line);
+                std::string current_part;
+
+                while (std::getline(line_stream, current_part, '|')) {
+                    parts.push_back(current_part);
+                }
+
+                if (parts.size() < 4) {
+                    continue;
+                }
+
+                std::string username = parts[1];
+                std::string status = map_server_status_to_display_status(parts[2]);
+                bool has_private_chat = (parts[3] == "true" || parts[3] == "1");
+
+                if (username.empty()) {
+                    username = "Usuario";
+                }
+
+                if (status.empty()) {
+                    status = "-";
+                }
+
+                refreshed_users.push_back({username, status, has_private_chat});
+                contains_user_info = true;
                 continue;
             }
 
-            std::string sender = response_line.substr(
-                public_message_prefix.size(),
-                sender_separator_index - public_message_prefix.size()
-            );
-            std::string content = response_line.substr(sender_separator_index + 1);
-            refreshed_messages.push_back("/" + sender + " " + content);
+            if (response_line.rfind(server_warning_prefix, 0) == 0) {
+                server_notifications.push_back(
+                    "/SERVER " + response_line.substr(server_warning_prefix.size())
+                );
+                continue;
+            }
+
+            if (response_line.rfind(ok_prefix, 0) == 0 ||
+                response_line.rfind(error_prefix, 0) == 0 ||
+                response_line.rfind(info_prefix, 0) == 0) {
+
+                if (response_line == "OK|STATUS") {
+                    std::string status_label = last_requested_display_status.empty()
+                        ? "desconocido"
+                        : last_requested_display_status;
+                    server_notifications.push_back(
+                        "/SERVER " + current_username + " cambió su estado a " + status_label
+                    );
+                    last_requested_display_status.clear();
+                    should_refresh_users_after_status_update = true;
+                } else {
+                    server_notifications.push_back("/SERVER " + response_line);
+                }
+                continue;
+            }
         }
 
-        if (refreshed_messages.empty()) {
-            refreshed_messages.push_back("/SERVER No hay mensajes públicos todavía");
+        std::lock_guard<std::mutex> lock(shared_state_mutex);
+
+        if (contains_public_messages) {
+            if (awaiting_public_messages_refresh.exchange(false)) {
+                if (refreshed_public_messages.empty()) {
+                    server_messages = {
+                        "/SERVER No hay mensajes públicos todavía"
+                    };
+                } else {
+                    server_messages = refreshed_public_messages;
+                }
+            } else {
+                for (const std::string& refreshed_message : refreshed_public_messages) {
+                    server_messages.push_back(refreshed_message);
+                }
+            }
         }
 
-        server_messages = refreshed_messages;
+        if (contains_user_info && awaiting_users_refresh.exchange(false)) {
+            if (refreshed_users.empty()) {
+                users = {
+                    {"Sin usuarios conectados", "-", false}
+                };
+            } else {
+                users = refreshed_users;
+            }
+        }
+
+        for (const std::string& notification_message : server_notifications) {
+            server_messages.push_back(notification_message);
+        }
+
+        if (should_refresh_users_after_status_update) {
+            refresh_connected_users();
+        }
+    };
+
+    auto start_server_listener = [&]() {
+        if (!active_chat_client || keep_listening) {
+            return;
+        }
+
+        // Activar timeout de recv() solo ahora que el registro ya terminó.
+        // El listener usará este timeout para hacer auto-refresh periódico.
+        active_chat_client->enableReceiveTimeout(5);
+
+        keep_listening = true;
+        server_listener_thread = std::thread([&]() {
+            while (keep_listening && active_chat_client && active_chat_client->isConnected()) {
+                std::string server_response = active_chat_client->receiveMessage();
+
+                if (!keep_listening) {
+                    break;
+                }
+
+                // El recv() tiene un timeout de 3s. Cuando vence sin datos,
+                // aprovechamos para pedir el estado actualizado del servidor.
+                if (server_response == "TIMEOUT") {
+                    refresh_public_messages();
+                    refresh_connected_users();
+                    continue;
+                }
+
+                if (server_response == "ERROR|CLIENT|CONNECTION_CLOSED") {
+                    std::lock_guard<std::mutex> lock(shared_state_mutex);
+                    server_messages.push_back("/SERVER Conexión cerrada con el servidor.");
+                    break;
+                }
+
+                handle_server_response(server_response);
+                screen.PostEvent(Event::Custom);
+            }
+
+            keep_listening = false;
+        });
+    };
+
+    auto stop_server_listener = [&]() {
+        keep_listening = false;
+
+        if (active_chat_client) {
+            active_chat_client->disconnect();
+        }
+
+        if (server_listener_thread.joinable()) {
+            server_listener_thread.join();
+        }
     };
 
     auto send_public_chat_message = [&](const std::string& message_content) {
-        if (current_username.empty() || current_server_ip.empty() || current_server_port <= 0) {
+        if (current_username.empty() || !active_chat_client) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
             server_messages.push_back("/SERVER No hay una sesión activa para enviar mensajes.");
             return;
         }
 
-        if (message_content.empty()) {
+        std::string trimmed_message_content = message_content;
+
+        while (!trimmed_message_content.empty() && trimmed_message_content.front() == ' ') {
+            trimmed_message_content.erase(trimmed_message_content.begin());
+        }
+
+        while (!trimmed_message_content.empty() && trimmed_message_content.back() == ' ') {
+            trimmed_message_content.pop_back();
+        }
+
+        if (trimmed_message_content.empty()) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
             server_messages.push_back("/SERVER No se puede enviar un mensaje vacío.");
             return;
         }
 
-        ChatClient chat_client(current_server_ip, current_server_port);
-        std::string server_response = chat_client.sendPublicMessage(
-            current_username,
-            message_content
-        );
+        if (!active_chat_client->sendPublicMessageRequest(current_username, trimmed_message_content)) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            server_messages.push_back("/SERVER No se pudo enviar el mensaje.");
+            return;
+        }
+    };
 
-        if (server_response.rfind("ERROR|", 0) == 0) {
+    auto send_status_update = [&](const std::string& display_status) {
+        if (current_username.empty() || !active_chat_client) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            server_messages.push_back("/SERVER No hay una sesión activa para actualizar el estado.");
+            return;
+        }
+
+        std::string server_status = map_display_status_to_server_status(display_status);
+
+        if (server_status.empty()) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
             server_messages.push_back(
-                "/SERVER No se pudo enviar el mensaje: " + server_response
+                "/SERVER Estado inválido. Use /status ACTIVO, /status OCUPADO o /status INACTIVO."
             );
             return;
         }
 
-        refresh_public_messages();
+        last_requested_display_status = display_status;
+
+        if (!active_chat_client->sendStatusRequest(current_username, server_status)) {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            server_messages.push_back("/SERVER No se pudo enviar la actualización de estado.");
+            last_requested_display_status.clear();
+            return;
+        }
     };
 
     Component input = Input(&command_input, "");
@@ -191,19 +481,34 @@ int main() {
             return HelpScreen(help_origin);
         }
 
+        std::vector<UserItem> users_snapshot;
+        std::vector<std::string> server_messages_snapshot;
+        std::vector<std::string> private_messages_snapshot;
+
+        {
+            std::lock_guard<std::mutex> lock(shared_state_mutex);
+            users_snapshot = users;
+            server_messages_snapshot = server_messages;
+            private_messages_snapshot = private_messages;
+        }
+
         Element command_line = hbox({
             text("> "),
             input->Render() | flex,
         });
 
         if (current_view == ScreenView::PrivateChat) {
-            return PrivateChat(private_chat_user, private_messages, command_line);
+            return PrivateChat(private_chat_user, private_messages_snapshot, command_line);
         }
 
-        return GeneralChat(users, server_messages, command_line);
+        return GeneralChat(users_snapshot, server_messages_snapshot, command_line);
     });
 
     app = CatchEvent(app, [&](Event event) {
+        if (event == Event::Custom) {
+            return true;
+        }
+
         if (is_registering) {
             auto save_active_register_field = [&]() {
                 if (active_register_field == RegisterField::Username) {
@@ -269,6 +574,10 @@ int main() {
                     return true;
                 }
 
+                if (registration_in_progress) {
+                    return true;
+                }
+
                 if (username_input.empty() || server_ip_input.empty() || server_port_input.empty()) {
                     register_helper_message = "Complete username, IP y puerto antes de registrarse.";
                     return true;
@@ -280,19 +589,61 @@ int main() {
                     return true;
                 }
 
-                ChatClient register_client(server_ip_input, parsed_server_port);
-                std::string register_response = register_client.registerUser(username_input);
-                register_helper_message = register_response;
+                // Mostrar feedback inmediato. No llamar PostEvent aquí —
+                // FTXUI re-renderiza solo cuando CatchEvent retorna.
+                register_helper_message = "Conectando...";
+                registration_in_progress = true;
 
-                if (register_response.rfind("OK|REGISTER", 0) == 0) {
-                    current_username = username_input;
-                    current_server_ip = server_ip_input;
-                    current_server_port = parsed_server_port;
+                // Capturar los valores que el hilo necesita (no capturas por ref de inputs locales).
+                std::string reg_username  = username_input;
+                std::string reg_server_ip = server_ip_input;
+                int         reg_port      = parsed_server_port;
 
-                    is_registering = false;
-                    command_input.clear();
-                    server_messages.push_back("/SERVER Resultado registro: " + register_response);
-                }
+                // El hilo se lanza como detached: no necesita join y nunca bloquea el event loop.
+                std::thread([&, reg_username, reg_server_ip, reg_port]() {
+                    auto new_client = std::make_unique<ChatClient>(reg_server_ip, reg_port);
+
+                    if (!new_client->connectToServer()) {
+                        register_helper_message = "Error: no se pudo conectar al servidor.";
+                        registration_in_progress = false;
+                        screen.PostEvent(Event::Custom);
+                        return;
+                    }
+
+                    if (!new_client->sendRegisterRequest(reg_username)) {
+                        register_helper_message = "Error: no se pudo enviar el registro.";
+                        registration_in_progress = false;
+                        screen.PostEvent(Event::Custom);
+                        return;
+                    }
+
+                    std::string register_response = new_client->receiveMessage();
+
+                    if (register_response.rfind("OK|REGISTER", 0) == 0) {
+                        active_chat_client = std::move(new_client);
+                        current_username   = reg_username;
+                        current_server_ip  = reg_server_ip;
+                        current_server_port = reg_port;
+
+                        is_registering = false;
+
+                        {
+                            std::lock_guard<std::mutex> lock(shared_state_mutex);
+                            command_input.clear();
+                        }
+
+                        start_server_listener();
+                        refresh_initial_data();
+                    } else {
+                        register_helper_message = register_response.empty()
+                            ? "Error: sin respuesta del servidor."
+                            : register_response;
+                    }
+
+                    registration_in_progress = false;
+                    screen.PostEvent(Event::Custom);
+                }).detach();
+
                 return true;
             }
         }
@@ -321,7 +672,6 @@ int main() {
                 return true;
             }
 
-            // TODO: Manejar logica con /private <nombreUsuario> esto solo es para ver UI de momento
             if (current_view == ScreenView::GeneralChat && command_input == "/private") {
                 current_view = ScreenView::PrivateChat;
                 command_input.clear();
@@ -341,13 +691,40 @@ int main() {
                 return true;
             }
 
+            if (current_view == ScreenView::GeneralChat &&
+                (command_input.rfind("/status ", 0) == 0 || command_input.rfind("status ", 0) == 0)) {
+                std::string requested_status;
+
+                if (command_input.rfind("/status ", 0) == 0) {
+                    requested_status = command_input.substr(8);
+                } else {
+                    requested_status = command_input.substr(7);
+                }
+
+                while (!requested_status.empty() && requested_status.front() == ' ') {
+                    requested_status.erase(requested_status.begin());
+                }
+
+                while (!requested_status.empty() && requested_status.back() == ' ') {
+                    requested_status.pop_back();
+                }
+
+                send_status_update(requested_status);
+                command_input.clear();
+                return true;
+            }
+
             if (current_view == ScreenView::GeneralChat && command_input == "/refresh") {
-                refresh_public_messages();
+                refresh_initial_data();
                 command_input.clear();
                 return true;
             }
 
             if (command_input == "/exit") {
+                if (active_chat_client) {
+                    active_chat_client->sendExitRequest(current_username);
+                }
+                stop_server_listener();
                 screen.ExitLoopClosure()();
                 return true;
             }
@@ -359,6 +736,7 @@ int main() {
     });
 
     screen.Loop(app);
+    stop_server_listener();
 
     return 0;
 }

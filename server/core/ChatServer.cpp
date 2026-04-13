@@ -190,14 +190,17 @@ static void* handleClient(void* raw_thread_arguments) {
 
     delete client_thread_arguments; // liberar memoria
 
+    // Buffer acumulador: guarda bytes recibidos hasta completar una línea (\n).
+    // Esto resuelve el problema de framing en TCP — varios mensajes del cliente
+    // pueden llegar concatenados en un solo recv(), y este buffer permite
+    // procesarlos uno a uno correctamente.
+    std::string incoming_buffer;
+    bool client_exited_cleanly = false;
+
     while (true) {
         char received_data_buffer[1024];
-
-        // memset -> llena un bloque de memoria con un valor especifico
-        /// destino, valor, cantidad de bytes
         std::memset(received_data_buffer, 0, sizeof(received_data_buffer));
 
-        // recv -> lee datos que el cliente mande x conexión y guárdalo en el buffer
         ssize_t received_byte_count = recv(
             client_socket_file_descriptor,
             received_data_buffer,
@@ -206,261 +209,283 @@ static void* handleClient(void* raw_thread_arguments) {
         );
 
         if (received_byte_count > 0) {
-            std::string received_raw_message(received_data_buffer, received_byte_count);
-            std::cout << "Mensaje recibido del cliente: " << received_raw_message << std::endl;
+            incoming_buffer.append(received_data_buffer, received_byte_count);
 
-            Message parsed_client_message = MessageParser::parse(received_raw_message);
-            std::string server_response_message;
+            // Procesar todos los mensajes completos (terminados en \n) que haya en el buffer.
+            std::size_t newline_position;
+            while ((newline_position = incoming_buffer.find('\n')) != std::string::npos) {
+                std::string received_raw_message = incoming_buffer.substr(0, newline_position);
+                incoming_buffer.erase(0, newline_position + 1);
 
-            switch (parsed_client_message.type) {
-                case MessageType::Register:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-
-                    if (connected_client_count < MAX_CLIENTS) {
-                        connected_clients[connected_client_count++] = {
-                            .socket_fd = client_socket_file_descriptor,
-                            .username = parsed_client_message.sender,
-                            .ip_address = inet_ntoa(client_address.sin_addr),
-                            .status = "online",
-                            .thread_id = [] {
-                                std::ostringstream thread_id_stream;
-                                thread_id_stream << pthread_self();
-                                return thread_id_stream.str();
-                            }()
-                        };
-                    } else {
-                        server_response_message = MessageSerializer::buildErrorResponse(
-                            "REGISTER",
-                            "SERVER_FULL"
-                        ) + "\n";
-                        pthread_mutex_unlock(&clients_mutex);
-                        break;
-                    }
-
-                    server_response_message = MessageSerializer::buildOkResponse("REGISTER") + "\n";
-                    pthread_mutex_unlock(&clients_mutex);
-                    break;
-
-                case MessageType::ChatPublic:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    trimLineBreaksAndSpaces(parsed_client_message.content);
-
-                    if (public_chat_message_count < MAX_PUBLIC_MESSAGES) {
-                        public_chat_messages[public_chat_message_count++] = parsed_client_message;
-                    } else {
-                        for (int message_index = 0; message_index < MAX_PUBLIC_MESSAGES - 1; message_index++) {
-                            public_chat_messages[message_index] = public_chat_messages[message_index + 1];
-                        }
-                        public_chat_messages[MAX_PUBLIC_MESSAGES - 1] = parsed_client_message;
-                    }
-
-                    server_response_message = MessageSerializer::buildPublicMessage(
-                        parsed_client_message.sender,
-                        parsed_client_message.content
-                    ) + "\n";
-                    pthread_mutex_unlock(&clients_mutex);
-                    break;
-
-                case MessageType::ChatPrivate: {
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    trimLineBreaksAndSpaces(parsed_client_message.target);
-                    trimLineBreaksAndSpaces(parsed_client_message.content);
-
-                    int target_socket_file_descriptor =
-                        findSocketByUsername(parsed_client_message.target);
-
-                    if (target_socket_file_descriptor == -1) {
-                        server_response_message =
-                            MessageSerializer::buildErrorResponse("PRIVATE", "USER_NOT_FOUND") + "\n";
-                        pthread_mutex_unlock(&clients_mutex);
-                        break;
-                    }
-
-                    PrivateConversation* private_conversation =
-                        findOrCreatePrivateConversation(
-                            parsed_client_message.sender,
-                            parsed_client_message.target
-                        );
-
-                    if (!private_conversation) {
-                        server_response_message = MessageSerializer::buildErrorResponse(
-                            "PRIVATE",
-                            "MAX_CONVOS_REACHED"
-                        ) + "\n";
-                        pthread_mutex_unlock(&clients_mutex);
-                        break;
-                    }
-                    pthread_mutex_unlock(&clients_mutex);
-
-                    pthread_mutex_lock(&private_conversation->mutex);
-                    if (private_conversation->message_count < PRIVATE_MSG_MAX) {
-                        private_conversation->messages[private_conversation->message_count++] =
-                            parsed_client_message;
-                    } else {
-                        for (int message_index = 0; message_index < PRIVATE_MSG_MAX - 1; message_index++) {
-                            private_conversation->messages[message_index] =
-                                private_conversation->messages[message_index + 1];
-                        }
-                        private_conversation->messages[PRIVATE_MSG_MAX - 1] = parsed_client_message;
-                    }
-                    pthread_mutex_unlock(&private_conversation->mutex);
-
-                    // Por ahora, el destinatario recibe el historial completo de la conversación.
-                    // Más adelante conviene refactorizar esta parte para separar almacenamiento,
-                    // construcción de respuesta y envío de mensajes en funciones distintas.
-                    pthread_mutex_lock(&private_conversation->mutex);
-                    for (int message_index = 0;
-                         message_index < private_conversation->message_count;
-                         message_index++) {
-                        std::string serialized_private_message =
-                            MessageSerializer::buildPrivateMessage(
-                                private_conversation->messages[message_index].sender,
-                                private_conversation->messages[message_index].target,
-                                private_conversation->messages[message_index].content
-                            ) + "\n";
-
-                        ssize_t sent_private_message_byte_count = send(
-                            target_socket_file_descriptor,
-                            serialized_private_message.c_str(),
-                            serialized_private_message.size(),
-                            0
-                        );
-
-                        if (sent_private_message_byte_count < 0) {
-                            std::cerr << "Error enviando mensaje privado al usuario destino." << std::endl;
-                        }
-                    }
-                    pthread_mutex_unlock(&private_conversation->mutex);
-
-                    server_response_message = MessageSerializer::buildPrivateMessage(
-                        parsed_client_message.sender,
-                        parsed_client_message.target,
-                        parsed_client_message.content
-                    ) + "\n";
-                    break;
+                if (received_raw_message.empty()) {
+                    continue;
                 }
 
-                case MessageType::GetAll:
-                    pthread_mutex_lock(&clients_mutex);
-                    for (int message_index = 0;
-                         message_index < public_chat_message_count;
-                         message_index++) {
-                        if (public_chat_messages[message_index].type == MessageType::ChatPublic) {
-                            server_response_message += MessageSerializer::buildPublicMessage(
-                                public_chat_messages[message_index].sender,
-                                public_chat_messages[message_index].content
+                std::cout << "Mensaje recibido del cliente: " << received_raw_message << std::endl;
+
+                Message parsed_client_message = MessageParser::parse(received_raw_message);
+                std::string server_response_message;
+
+                switch (parsed_client_message.type) {
+                    case MessageType::Register:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+
+                        if (connected_client_count < MAX_CLIENTS) {
+                            connected_clients[connected_client_count++] = {
+                                .socket_fd = client_socket_file_descriptor,
+                                .username = parsed_client_message.sender,
+                                .ip_address = inet_ntoa(client_address.sin_addr),
+                                .status = "online",
+                                .thread_id = [] {
+                                    std::ostringstream thread_id_stream;
+                                    thread_id_stream << pthread_self();
+                                    return thread_id_stream.str();
+                                }()
+                            };
+                        } else {
+                            server_response_message = MessageSerializer::buildErrorResponse(
+                                "REGISTER",
+                                "SERVER_FULL"
                             ) + "\n";
-                        }
-                    }
-                    pthread_mutex_unlock(&clients_mutex);
-                    break;
-
-                case MessageType::GetUsers:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    for (int client_index = 0; client_index < connected_client_count; client_index++) {
-                        bool shares_private_conversation = userHasPrivateChatWithMe(
-                            connected_clients[client_index].username,
-                            parsed_client_message.sender
-                        );
-
-                        server_response_message += MessageSerializer::buildUserInfo(
-                            connected_clients[client_index].username,
-                            connected_clients[client_index].status,
-                            shares_private_conversation
-                        ) + "\n";
-                    }
-                    pthread_mutex_unlock(&clients_mutex);
-                    break;
-
-                case MessageType::Info:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    trimLineBreaksAndSpaces(parsed_client_message.content);
-
-                    for (int client_index = 0; client_index < connected_client_count; client_index++) {
-                        if (connected_clients[client_index].username == parsed_client_message.content) {
-                            server_response_message = MessageSerializer::buildInfoResponse(
-                                connected_clients[client_index].username,
-                                connected_clients[client_index].ip_address,
-                                connected_clients[client_index].status
-                            ) + "\n";
+                            pthread_mutex_unlock(&clients_mutex);
                             break;
                         }
-                    }
-                    pthread_mutex_unlock(&clients_mutex);
 
-                    if (server_response_message.empty()) {
-                        server_response_message = MessageSerializer::buildErrorResponse(
-                            "INFO",
-                            "USER_NOT_FOUND"
-                        ) + "\n";
-                    }
-                    break;
+                        server_response_message = MessageSerializer::buildOkResponse("REGISTER") + "\n";
+                        pthread_mutex_unlock(&clients_mutex);
+                        break;
 
-                case MessageType::Status:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    trimLineBreaksAndSpaces(parsed_client_message.content);
+                    case MessageType::ChatPublic:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        trimLineBreaksAndSpaces(parsed_client_message.content);
 
-                    if (parsed_client_message.content != "online" &&
-                        parsed_client_message.content != "offline" &&
-                        parsed_client_message.content != "away") {
-                        server_response_message = MessageSerializer::buildErrorResponse(
-                            "STATUS",
-                            "INVALID_STATUS"
+                        if (public_chat_message_count < MAX_PUBLIC_MESSAGES) {
+                            public_chat_messages[public_chat_message_count++] = parsed_client_message;
+                        } else {
+                            for (int message_index = 0; message_index < MAX_PUBLIC_MESSAGES - 1; message_index++) {
+                                public_chat_messages[message_index] = public_chat_messages[message_index + 1];
+                            }
+                            public_chat_messages[MAX_PUBLIC_MESSAGES - 1] = parsed_client_message;
+                        }
+
+                        server_response_message = MessageSerializer::buildPublicMessage(
+                            parsed_client_message.sender,
+                            parsed_client_message.content
                         ) + "\n";
                         pthread_mutex_unlock(&clients_mutex);
                         break;
-                    }
 
-                    for (int client_index = 0; client_index < connected_client_count; client_index++) {
-                        if (connected_clients[client_index].socket_fd == client_socket_file_descriptor) {
-                            connected_clients[client_index].status = parsed_client_message.content;
-                            server_response_message = MessageSerializer::buildOkResponse("STATUS") + "\n";
+                    case MessageType::ChatPrivate: {
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        trimLineBreaksAndSpaces(parsed_client_message.target);
+                        trimLineBreaksAndSpaces(parsed_client_message.content);
+
+                        int target_socket_file_descriptor =
+                            findSocketByUsername(parsed_client_message.target);
+
+                        if (target_socket_file_descriptor == -1) {
+                            server_response_message =
+                                MessageSerializer::buildErrorResponse("PRIVATE", "USER_NOT_FOUND") + "\n";
+                            pthread_mutex_unlock(&clients_mutex);
                             break;
                         }
-                    }
-                    pthread_mutex_unlock(&clients_mutex);
-                    break;
 
-                case MessageType::Exit:
-                    pthread_mutex_lock(&clients_mutex);
-                    trimLineBreaksAndSpaces(parsed_client_message.sender);
-                    for (int client_index = 0; client_index < connected_client_count; client_index++) {
-                        if (connected_clients[client_index].socket_fd == client_socket_file_descriptor) {
-                            connected_clients[client_index] =
-                                connected_clients[--connected_client_count];
+                        PrivateConversation* private_conversation =
+                            findOrCreatePrivateConversation(
+                                parsed_client_message.sender,
+                                parsed_client_message.target
+                            );
+
+                        if (!private_conversation) {
+                            server_response_message = MessageSerializer::buildErrorResponse(
+                                "PRIVATE",
+                                "MAX_CONVOS_REACHED"
+                            ) + "\n";
+                            pthread_mutex_unlock(&clients_mutex);
                             break;
                         }
+                        pthread_mutex_unlock(&clients_mutex);
+
+                        pthread_mutex_lock(&private_conversation->mutex);
+                        if (private_conversation->message_count < PRIVATE_MSG_MAX) {
+                            private_conversation->messages[private_conversation->message_count++] =
+                                parsed_client_message;
+                        } else {
+                            for (int message_index = 0; message_index < PRIVATE_MSG_MAX - 1; message_index++) {
+                                private_conversation->messages[message_index] =
+                                    private_conversation->messages[message_index + 1];
+                            }
+                            private_conversation->messages[PRIVATE_MSG_MAX - 1] = parsed_client_message;
+                        }
+                        pthread_mutex_unlock(&private_conversation->mutex);
+
+                        // Por ahora, el destinatario recibe el historial completo de la conversación.
+                        pthread_mutex_lock(&private_conversation->mutex);
+                        for (int message_index = 0;
+                             message_index < private_conversation->message_count;
+                             message_index++) {
+                            std::string serialized_private_message =
+                                MessageSerializer::buildPrivateMessage(
+                                    private_conversation->messages[message_index].sender,
+                                    private_conversation->messages[message_index].target,
+                                    private_conversation->messages[message_index].content
+                                ) + "\n";
+
+                            ssize_t sent_private_message_byte_count = send(
+                                target_socket_file_descriptor,
+                                serialized_private_message.c_str(),
+                                serialized_private_message.size(),
+                                0
+                            );
+
+                            if (sent_private_message_byte_count < 0) {
+                                std::cerr << "Error enviando mensaje privado al usuario destino." << std::endl;
+                            }
+                        }
+                        pthread_mutex_unlock(&private_conversation->mutex);
+
+                        server_response_message = MessageSerializer::buildPrivateMessage(
+                            parsed_client_message.sender,
+                            parsed_client_message.target,
+                            parsed_client_message.content
+                        ) + "\n";
+                        break;
                     }
-                    server_response_message = MessageSerializer::buildOkResponse("EXIT") + "\n";
-                    pthread_mutex_unlock(&clients_mutex);
+
+                    case MessageType::GetAll:
+                        pthread_mutex_lock(&clients_mutex);
+                        for (int message_index = 0;
+                             message_index < public_chat_message_count;
+                             message_index++) {
+                            if (public_chat_messages[message_index].type == MessageType::ChatPublic) {
+                                server_response_message += MessageSerializer::buildPublicMessage(
+                                    public_chat_messages[message_index].sender,
+                                    public_chat_messages[message_index].content
+                                ) + "\n";
+                            }
+                        }
+                        pthread_mutex_unlock(&clients_mutex);
+                        break;
+
+                    case MessageType::GetUsers:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        for (int client_index = 0; client_index < connected_client_count; client_index++) {
+                            bool shares_private_conversation = userHasPrivateChatWithMe(
+                                connected_clients[client_index].username,
+                                parsed_client_message.sender
+                            );
+
+                            server_response_message += MessageSerializer::buildUserInfo(
+                                connected_clients[client_index].username,
+                                connected_clients[client_index].status,
+                                shares_private_conversation
+                            ) + "\n";
+                        }
+                        pthread_mutex_unlock(&clients_mutex);
+                        break;
+
+                    case MessageType::Info:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        trimLineBreaksAndSpaces(parsed_client_message.content);
+
+                        for (int client_index = 0; client_index < connected_client_count; client_index++) {
+                            if (connected_clients[client_index].username == parsed_client_message.content) {
+                                server_response_message = MessageSerializer::buildInfoResponse(
+                                    connected_clients[client_index].username,
+                                    connected_clients[client_index].ip_address,
+                                    connected_clients[client_index].status
+                                ) + "\n";
+                                break;
+                            }
+                        }
+                        pthread_mutex_unlock(&clients_mutex);
+
+                        if (server_response_message.empty()) {
+                            server_response_message = MessageSerializer::buildErrorResponse(
+                                "INFO",
+                                "USER_NOT_FOUND"
+                            ) + "\n";
+                        }
+                        break;
+
+                    case MessageType::Status:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        trimLineBreaksAndSpaces(parsed_client_message.content);
+
+                        if (parsed_client_message.content != "online" &&
+                            parsed_client_message.content != "offline" &&
+                            parsed_client_message.content != "away") {
+                            server_response_message = MessageSerializer::buildErrorResponse(
+                                "STATUS",
+                                "INVALID_STATUS"
+                            ) + "\n";
+                            pthread_mutex_unlock(&clients_mutex);
+                            break;
+                        }
+
+                        for (int client_index = 0; client_index < connected_client_count; client_index++) {
+                            if (connected_clients[client_index].socket_fd == client_socket_file_descriptor) {
+                                connected_clients[client_index].status = parsed_client_message.content;
+                                server_response_message = MessageSerializer::buildOkResponse("STATUS") + "\n";
+                                break;
+                            }
+                        }
+                        pthread_mutex_unlock(&clients_mutex);
+                        break;
+
+                    case MessageType::Exit:
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        for (int client_index = 0; client_index < connected_client_count; client_index++) {
+                            if (connected_clients[client_index].socket_fd == client_socket_file_descriptor) {
+                                connected_clients[client_index] =
+                                    connected_clients[--connected_client_count];
+                                break;
+                            }
+                        }
+                        server_response_message = MessageSerializer::buildOkResponse("EXIT") + "\n";
+                        pthread_mutex_unlock(&clients_mutex);
+                        client_exited_cleanly = true;
+                        break;
+
+                    case MessageType::Unknown:
+                    default:
+                        server_response_message = MessageSerializer::buildErrorResponse(
+                            "UNKNOWN",
+                            "INVALID_MESSAGE_FORMAT"
+                        ) + "\n";
+                        break;
+                }
+
+                if (!server_response_message.empty()) {
+                    ssize_t sent_byte_count = send(
+                        client_socket_file_descriptor,
+                        server_response_message.c_str(),
+                        server_response_message.size(),
+                        0
+                    );
+
+                    if (sent_byte_count < 0) {
+                        std::cerr << "Error: no se pudo enviar la respuesta al cliente." << std::endl;
+                    }
+
+                    std::cout << "Respuesta enviada al cliente: " << server_response_message << std::endl;
+                }
+
+                if (client_exited_cleanly) {
                     break;
-                case MessageType::Unknown:
-                default:
-                    server_response_message = MessageSerializer::buildErrorResponse(
-                        "UNKNOWN",
-                        "INVALID_MESSAGE_FORMAT"
-                    ) + "\n";
-                    break;
+                }
             }
 
-            ssize_t sent_byte_count = send(
-                client_socket_file_descriptor,
-                server_response_message.c_str(),
-                server_response_message.size(),
-                0
-            );
-
-            if (sent_byte_count < 0) {
-                std::cerr << "Error: no se pudo enviar la respuesta al cliente." << std::endl;
+            if (client_exited_cleanly) {
+                break;
             }
-
-            std::cout << "Respuesta enviada al cliente: " << server_response_message << std::endl;
         } else {
             std::cerr << "Error o conexión cerrada sin datos." << std::endl;
 
