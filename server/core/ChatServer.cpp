@@ -20,8 +20,9 @@
 #define MAX_CLIENTS 5
 #define MAX_PRIVATE_CONVERSATIONS (MAX_CLIENTS * (MAX_CLIENTS - 1) / 2)
 
-ChatServer::ChatServer(int port)
-    : server_port(port), server_socket_file_descriptor(-1) {
+ChatServer::ChatServer(int port): 
+    server_port(port), 
+    server_socket_file_descriptor(-1) {
 }
 
 Message public_chat_messages[MAX_PUBLIC_MESSAGES];
@@ -60,6 +61,8 @@ static PrivateConversation* findOrCreatePrivateConversation(
 ) {
     std::string canonical_first_username;
     std::string canonical_second_username;
+
+    // Construir la pareja canónica para evitar duplicados
     buildCanonicalPair(
         first_username,
         second_username,
@@ -67,6 +70,7 @@ static PrivateConversation* findOrCreatePrivateConversation(
         canonical_second_username
     );
 
+    // Buscar conversación existente
     for (int conversation_index = 0; conversation_index < private_conversation_count; conversation_index++) {
         if (private_conversations[conversation_index].active &&
             private_conversations[conversation_index].user_a == canonical_first_username &&
@@ -75,19 +79,19 @@ static PrivateConversation* findOrCreatePrivateConversation(
         }
     }
 
+    // Verificar si hay espacio para una nueva conversación
     if (private_conversation_count >= MAX_PRIVATE_CONVERSATIONS) {
         return nullptr;
     }
 
-    PrivateConversation& new_private_conversation =
-        private_conversations[private_conversation_count++];
-
+    // Crear nueva conversación
+    // & -> Referencia al elemento del array, evita copiar el objeto
+    PrivateConversation& new_private_conversation = private_conversations[private_conversation_count++];
     new_private_conversation.user_a = canonical_first_username;
     new_private_conversation.user_b = canonical_second_username;
     new_private_conversation.message_count = 0;
     new_private_conversation.active = true;
 
-    // pthread_mutex_init(&new_private_conversation.mutex, nullptr); // Se inicializa x defecto en el objeto su mutex
     return &new_private_conversation;
 }
 
@@ -97,6 +101,7 @@ static bool userHasPrivateChatWithMe(
     const std::string& listed_username, // Usuario que se lista en la conversación
     const std::string& current_username // Usuario que está consultando
 ) {
+    // Validar si esta entre la lista de conversaciones
     for (int conversation_index = 0; conversation_index < private_conversation_count; conversation_index++) {
         if (private_conversations[conversation_index].active &&
             (private_conversations[conversation_index].user_a == listed_username ||
@@ -110,7 +115,7 @@ static bool userHasPrivateChatWithMe(
 }
 
 // Busca el socket de un usuario conectado a partir de su nombre.
-// Debe llamarse con clients_mutex ya tomado.
+// Debe llamarse con clients_mutex ya tomado
 static int findSocketByUsername(const std::string& username) {
     for (int client_index = 0; client_index < connected_client_count; client_index++) {
         if (connected_clients[client_index].username == username) {
@@ -251,6 +256,9 @@ static void* handleClient(void* raw_thread_arguments) {
                             pthread_mutex_unlock(&clients_mutex);
                             break;
                         }
+
+                        std::cout << "Cliente " << parsed_client_message.sender
+                                  << " corriendo en thread " << pthread_self() << std::endl;
 
                         server_response_message = MessageSerializer::buildOkResponse("REGISTER") + "\n";
                         pthread_mutex_unlock(&clients_mutex);

@@ -135,17 +135,17 @@ Si todos los participantes están en la misma red, el flujo es directo:
 
 ---
 
-### Acceso remoto con ngrok (distintas redes)
+### Acceso remoto con bore (distintas redes)
 
-Para probar desde redes diferentes (ej. cada participante en su casa) se utiliza [ngrok](https://ngrok.com), que crea un túnel TCP público hacia el servidor local. Solo la persona que corre el servidor necesita tenerlo instalado.
+Para probar desde redes diferentes (ej. cada participante en su casa) se utiliza [bore](https://github.com/ekzhang/bore), que crea un túnel TCP público hacia el servidor local. Es completamente gratuito, no requiere cuenta ni tarjeta. Solo la persona que corre el servidor necesita tenerlo instalado.
 
-**Instalación de ngrok:**
+**Instalación de bore:**
 
 ```
 # macOS (Homebrew)
-brew install ngrok
+brew install bore-cli
 
-# O descargar el binario desde https://ngrok.com/download
+# O descargar el binario desde https://github.com/ekzhang/bore/releases
 ```
 
 **Flujo:**
@@ -159,22 +159,22 @@ brew install ngrok
 2. En una terminal separada, abrir el túnel TCP:
 
    ```
-   ngrok tcp 5050
+   bore local 5050 --to bore.pub
    ```
 
-   ngrok mostrará algo como:
+   bore mostrará algo como:
 
    ```
-   Forwarding   tcp://0.tcp.ngrok.io:12345 -> localhost:5050
+   listening at bore.pub:XXXXX
    ```
 
 3. Compartir con los compañeros el hostname y puerto que aparece:
-   - **Server IP:** `0.tcp.ngrok.io`
-   - **Server Port:** `12345`
+   - **Server IP:** `bore.pub`
+   - **Server Port:** `XXXXX`
 
-4. Cada compañero ingresa esos datos en la pantalla de registro del cliente. No necesitan instalar ngrok ni ningún software adicional.
+4. Cada compañero ingresa esos datos en la pantalla de registro del cliente. No necesitan instalar bore ni ningún software adicional.
 
-> **Nota:** El puerto que asigna ngrok cambia cada vez que se reinicia el túnel. Si se cierra ngrok y se vuelve a abrir, hay que compartir el nuevo puerto.
+> **Nota:** El puerto que asigna bore cambia cada vez que se reinicia el túnel. Si se cierra bore y se vuelve a abrir, hay que compartir el nuevo puerto.
 
 ---
 

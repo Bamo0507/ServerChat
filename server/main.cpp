@@ -23,11 +23,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "\n=== Servidor listo ===" << std::endl;
+    std::cout << "\nSERVIDOR ARRIBA" << std::endl;
     std::cout << "Puerto local : " << port << std::endl;
-    std::cout << "Para pruebas remotas con ngrok:" << std::endl;
-    std::cout << "  ngrok tcp " << port << std::endl;
-    std::cout << "Luego comparte el hostname y puerto que muestre ngrok." << std::endl;
+    std::cout << "Para pruebas remotas con bore:" << std::endl;
+    std::cout << "-> bore local " << port << " --to bore.pub" << std::endl;
+    std::cout << "Luego comparte el hostname y puerto que muestre bore." << std::endl;
     std::cout << "======================\n" << std::endl;
 
     chat_server.run();
