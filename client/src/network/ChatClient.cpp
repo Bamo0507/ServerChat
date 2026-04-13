@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <mutex>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -30,15 +31,28 @@ bool ChatClient::connectToServer() {
         return false;
     }
 
-    sockaddr_in server_address{};
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(server_port);
+    // getaddrinfo resuelve tanto IPs numéricas ("192.168.1.1") como hostnames
+    // ("0.tcp.ngrok.io"), lo que permite conectar a través de túneles como ngrok.
+    struct addrinfo hints{};
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
 
-    if (inet_pton(AF_INET, server_ip.c_str(), &server_address.sin_addr) <= 0) {
+    struct addrinfo* resolved_address_list = nullptr;
+    std::string port_str = std::to_string(server_port);
+
+    int resolution_result = getaddrinfo(
+        server_ip.c_str(), port_str.c_str(), &hints, &resolved_address_list
+    );
+
+    if (resolution_result != 0 || resolved_address_list == nullptr) {
         close(client_socket_file_descriptor);
         client_socket_file_descriptor = -1;
         return false;
     }
+
+    sockaddr_in server_address{};
+    std::memcpy(&server_address, resolved_address_list->ai_addr, sizeof(server_address));
+    freeaddrinfo(resolved_address_list);
 
     if (connect(
             client_socket_file_descriptor,

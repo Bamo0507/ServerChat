@@ -109,3 +109,73 @@ Este ajuste no modifica la arquitectura base del proyecto:
 - La comunicación sigue realizándose mediante sockets.
 
 Por lo tanto, la diferencia principal no está en la lógica del sistema, sino en el medio utilizado para establecer la conectividad entre las máquinas durante las pruebas.
+
+---
+
+## Conectividad: misma red vs. acceso remoto
+
+### Misma red (WiFi o cable)
+
+Si todos los participantes están en la misma red, el flujo es directo:
+
+1. Quien corre el servidor anota su IP local (ej. `192.168.1.50`):
+
+   ```
+   # En macOS/Linux
+   ifconfig | grep "inet "
+   ```
+
+2. Levanta el servidor:
+
+   ```
+   ./build/chat_server 5050
+   ```
+
+3. Los demás clientes ingresan esa IP y puerto `5050` en la pantalla de registro.
+
+---
+
+### Acceso remoto con ngrok (distintas redes)
+
+Para probar desde redes diferentes (ej. cada participante en su casa) se utiliza [ngrok](https://ngrok.com), que crea un túnel TCP público hacia el servidor local. Solo la persona que corre el servidor necesita tenerlo instalado.
+
+**Instalación de ngrok:**
+
+```
+# macOS (Homebrew)
+brew install ngrok
+
+# O descargar el binario desde https://ngrok.com/download
+```
+
+**Flujo:**
+
+1. Levantar el servidor normalmente:
+
+   ```
+   ./build/chat_server 5050
+   ```
+
+2. En una terminal separada, abrir el túnel TCP:
+
+   ```
+   ngrok tcp 5050
+   ```
+
+   ngrok mostrará algo como:
+
+   ```
+   Forwarding   tcp://0.tcp.ngrok.io:12345 -> localhost:5050
+   ```
+
+3. Compartir con los compañeros el hostname y puerto que aparece:
+   - **Server IP:** `0.tcp.ngrok.io`
+   - **Server Port:** `12345`
+
+4. Cada compañero ingresa esos datos en la pantalla de registro del cliente. No necesitan instalar ngrok ni ningún software adicional.
+
+> **Nota:** El puerto que asigna ngrok cambia cada vez que se reinicia el túnel. Si se cierra ngrok y se vuelve a abrir, hay que compartir el nuevo puerto.
+
+---
+
+> La arquitectura no cambia entre ambos modos: un servidor, múltiples clientes, comunicación por sockets TCP. La única diferencia es el medio de red utilizado.
