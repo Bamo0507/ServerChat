@@ -31,6 +31,10 @@ public:
     bool sendPublicMessageRequest(const std::string& username, const std::string& content);
     bool sendGetUsersRequest(const std::string& username);
     bool sendStatusRequest(const std::string& username, const std::string& status);
+    bool sendPrivateMessageRequest(const std::string& username,
+                                   const std::string& target,
+                                   const std::string& content);
+    bool sendGetPrivateRequest(const std::string& username, const std::string& target);
     bool sendExitRequest(const std::string& username);
 
 private:

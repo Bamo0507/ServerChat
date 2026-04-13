@@ -214,6 +214,21 @@ bool ChatClient::sendStatusRequest(
     return ensureConnectedAndSend("STATUS|" + username + "|" + status);
 }
 
+bool ChatClient::sendPrivateMessageRequest(
+    const std::string& username,
+    const std::string& target,
+    const std::string& content
+) {
+    return ensureConnectedAndSend("PRIVATE|" + username + "|" + target + "|" + content);
+}
+
+bool ChatClient::sendGetPrivateRequest(
+    const std::string& username,
+    const std::string& target
+) {
+    return ensureConnectedAndSend("GETPRIVATE|" + username + "|" + target);
+}
+
 bool ChatClient::sendExitRequest(const std::string& username) {
     return ensureConnectedAndSend("EXIT|" + username);
 }

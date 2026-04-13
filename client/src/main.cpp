@@ -36,13 +36,8 @@ int main() {
         "/SERVER Bienvenido al chat"
     };
 
-    std::vector<std::string> private_messages = {
-        "/Adriana Hola Bryan",
-        "/Bryan Hola Adriana, ¿cómo estás?",
-        "/Adriana Todo bien"
-    };
-
-    std::string private_chat_user = "Adriana";
+    std::vector<std::string> private_messages;
+    std::string private_chat_user;
 
     bool is_registering = true;
     RegisterField active_register_field = RegisterField::Username;
@@ -62,6 +57,7 @@ int main() {
     std::thread server_listener_thread;
     std::atomic<bool> awaiting_public_messages_refresh = false;
     std::atomic<bool> awaiting_users_refresh = false;
+    std::atomic<bool> awaiting_private_refresh = false;
     std::string last_requested_display_status;
 
     std::string command_input;
@@ -180,9 +176,11 @@ int main() {
 
         std::vector<std::string> refreshed_public_messages;
         std::vector<UserItem> refreshed_users;
+        std::vector<std::string> refreshed_private_messages;
         std::vector<std::string> server_notifications;
         bool contains_public_messages = false;
         bool contains_user_info = false;
+        bool contains_private_messages = false;
         bool should_refresh_users_after_status_update = false;
 
         std::istringstream response_stream(server_response);
@@ -262,6 +260,30 @@ int main() {
                 continue;
             }
 
+            const std::string private_msg_prefix = "PRIVATE_MSG|";
+            if (response_line.rfind(private_msg_prefix, 0) == 0) {
+                std::vector<std::string> parts;
+                std::stringstream line_stream(response_line);
+                std::string current_part;
+
+                while (std::getline(line_stream, current_part, '|')) {
+                    parts.push_back(current_part);
+                }
+
+                // PRIVATE_MSG|sender|target|content
+                if (parts.size() >= 4) {
+                    std::string sender  = parts[1];
+                    std::string content = parts[3];
+
+                    // Solo agregar si viene del otro usuario (el propio ya se añadió optimistamente)
+                    if (sender != current_username) {
+                        refreshed_private_messages.push_back("/" + sender + " " + content);
+                        contains_private_messages = true;
+                    }
+                }
+                continue;
+            }
+
             if (response_line.rfind(ok_prefix, 0) == 0 ||
                 response_line.rfind(error_prefix, 0) == 0 ||
                 response_line.rfind(info_prefix, 0) == 0) {
@@ -307,6 +329,18 @@ int main() {
                 };
             } else {
                 users = refreshed_users;
+            }
+        }
+
+        if (contains_private_messages) {
+            if (awaiting_private_refresh.exchange(false)) {
+                // Respuesta a GETPRIVATE: reemplazar historial completo
+                private_messages = refreshed_private_messages;
+            } else {
+                // Mensaje nuevo entrante: agregar al final
+                for (const std::string& pm : refreshed_private_messages) {
+                    private_messages.push_back(pm);
+                }
             }
         }
 
@@ -672,14 +706,59 @@ int main() {
                 return true;
             }
 
-            if (current_view == ScreenView::GeneralChat && command_input == "/private") {
-                current_view = ScreenView::PrivateChat;
+            if (current_view == ScreenView::GeneralChat &&
+                command_input.rfind("/private ", 0) == 0) {
+                std::string target = command_input.substr(9);
+
+                while (!target.empty() && target.front() == ' ') {
+                    target.erase(target.begin());
+                }
+                while (!target.empty() && target.back() == ' ') {
+                    target.pop_back();
+                }
+
+                if (!target.empty() && active_chat_client) {
+                    private_chat_user = target;
+                    {
+                        std::lock_guard<std::mutex> lock(shared_state_mutex);
+                        private_messages.clear();
+                    }
+                    awaiting_private_refresh = true;
+                    active_chat_client->sendGetPrivateRequest(current_username, target);
+                    current_view = ScreenView::PrivateChat;
+                }
+
                 command_input.clear();
                 return true;
             }
 
             if (current_view == ScreenView::PrivateChat && command_input == "/return") {
                 current_view = ScreenView::GeneralChat;
+                command_input.clear();
+                return true;
+            }
+
+            if (current_view == ScreenView::PrivateChat &&
+                command_input.rfind("/chat ", 0) == 0 &&
+                !private_chat_user.empty() &&
+                active_chat_client) {
+                std::string content = command_input.substr(6);
+
+                while (!content.empty() && content.front() == ' ') {
+                    content.erase(content.begin());
+                }
+                while (!content.empty() && content.back() == ' ') {
+                    content.pop_back();
+                }
+
+                if (!content.empty()) {
+                    {
+                        std::lock_guard<std::mutex> lock(shared_state_mutex);
+                        private_messages.push_back("/" + current_username + " " + content);
+                    }
+                    active_chat_client->sendPrivateMessageRequest(current_username, private_chat_user, content);
+                }
+
                 command_input.clear();
                 return true;
             }

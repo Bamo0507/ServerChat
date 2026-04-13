@@ -27,6 +27,7 @@ MessageType parseMessageType(const string& command_text) {
     if (command_text == "INFO") return MessageType::Info;
     if (command_text == "GETALL") return MessageType::GetAll;
     if (command_text == "GETUSERS") return MessageType::GetUsers;
+    if (command_text == "GETPRIVATE") return MessageType::GetPrivate;
     if (command_text == "EXIT") return MessageType::Exit;
 
     return MessageType::Unknown;
@@ -79,6 +80,13 @@ Message MessageParser::parse(const string& raw_message) {
             if (message_parts.size() >= 3) {
                 message.sender = message_parts[1];
                 message.content = message_parts[2];
+            }
+            break;
+
+        case MessageType::GetPrivate:
+            if (message_parts.size() >= 3) {
+                message.sender = message_parts[1];
+                message.target = message_parts[2];
             }
             break;
 

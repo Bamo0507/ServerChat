@@ -322,36 +322,48 @@ static void* handleClient(void* raw_thread_arguments) {
                         }
                         pthread_mutex_unlock(&private_conversation->mutex);
 
-                        // Por ahora, el destinatario recibe el historial completo de la conversación.
-                        pthread_mutex_lock(&private_conversation->mutex);
-                        for (int message_index = 0;
-                             message_index < private_conversation->message_count;
-                             message_index++) {
-                            std::string serialized_private_message =
-                                MessageSerializer::buildPrivateMessage(
-                                    private_conversation->messages[message_index].sender,
-                                    private_conversation->messages[message_index].target,
-                                    private_conversation->messages[message_index].content
-                                ) + "\n";
-
-                            ssize_t sent_private_message_byte_count = send(
-                                target_socket_file_descriptor,
-                                serialized_private_message.c_str(),
-                                serialized_private_message.size(),
-                                0
-                            );
-
-                            if (sent_private_message_byte_count < 0) {
-                                std::cerr << "Error enviando mensaje privado al usuario destino." << std::endl;
-                            }
-                        }
-                        pthread_mutex_unlock(&private_conversation->mutex);
-
+                        // Enviar solo el mensaje nuevo al destinatario.
+                        // El historial completo se entrega únicamente via GETPRIVATE.
                         server_response_message = MessageSerializer::buildPrivateMessage(
                             parsed_client_message.sender,
                             parsed_client_message.target,
                             parsed_client_message.content
                         ) + "\n";
+
+                        send(
+                            target_socket_file_descriptor,
+                            server_response_message.c_str(),
+                            server_response_message.size(),
+                            0
+                        );
+                        break;
+                    }
+
+                    case MessageType::GetPrivate: {
+                        pthread_mutex_lock(&clients_mutex);
+                        trimLineBreaksAndSpaces(parsed_client_message.sender);
+                        trimLineBreaksAndSpaces(parsed_client_message.target);
+
+                        PrivateConversation* private_conversation =
+                            findOrCreatePrivateConversation(
+                                parsed_client_message.sender,
+                                parsed_client_message.target
+                            );
+                        pthread_mutex_unlock(&clients_mutex);
+
+                        if (private_conversation) {
+                            pthread_mutex_lock(&private_conversation->mutex);
+                            for (int message_index = 0;
+                                 message_index < private_conversation->message_count;
+                                 message_index++) {
+                                server_response_message += MessageSerializer::buildPrivateMessage(
+                                    private_conversation->messages[message_index].sender,
+                                    private_conversation->messages[message_index].target,
+                                    private_conversation->messages[message_index].content
+                                ) + "\n";
+                            }
+                            pthread_mutex_unlock(&private_conversation->mutex);
+                        }
                         break;
                     }
 
@@ -439,9 +451,10 @@ static void* handleClient(void* raw_thread_arguments) {
                         pthread_mutex_unlock(&clients_mutex);
                         break;
 
-                    case MessageType::Exit:
+                    case MessageType::Exit: {
                         pthread_mutex_lock(&clients_mutex);
                         trimLineBreaksAndSpaces(parsed_client_message.sender);
+
                         for (int client_index = 0; client_index < connected_client_count; client_index++) {
                             if (connected_clients[client_index].socket_fd == client_socket_file_descriptor) {
                                 connected_clients[client_index] =
@@ -449,10 +462,27 @@ static void* handleClient(void* raw_thread_arguments) {
                                 break;
                             }
                         }
+
+                        // Notificar a todos los demás clientes que este usuario se desconectó.
+                        std::string disconnect_broadcast =
+                            MessageSerializer::buildServerWarning(
+                                parsed_client_message.sender + " se ha desconectado"
+                            ) + "\n";
+
+                        for (int client_index = 0; client_index < connected_client_count; client_index++) {
+                            send(
+                                connected_clients[client_index].socket_fd,
+                                disconnect_broadcast.c_str(),
+                                disconnect_broadcast.size(),
+                                0
+                            );
+                        }
+
                         server_response_message = MessageSerializer::buildOkResponse("EXIT") + "\n";
                         pthread_mutex_unlock(&clients_mutex);
                         client_exited_cleanly = true;
                         break;
+                    }
 
                     case MessageType::Unknown:
                     default:

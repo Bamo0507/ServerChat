@@ -14,6 +14,7 @@ enum class MessageType {
     Info,
     GetAll,
     GetUsers,
+    GetPrivate,
     Exit,
     Unknown
 };
