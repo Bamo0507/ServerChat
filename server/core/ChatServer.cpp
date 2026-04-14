@@ -95,6 +95,25 @@ static PrivateConversation* findOrCreatePrivateConversation(
     return &new_private_conversation;
 }
 
+// Busca una conversación privada existente. Devuelve nullptr si no existe.
+// Debe llamarse con clients_mutex ya tomado.
+static PrivateConversation* findPrivateConversation(
+    const std::string& first_username,
+    const std::string& second_username
+) {
+    std::string canonical_first, canonical_second;
+    buildCanonicalPair(first_username, second_username, canonical_first, canonical_second);
+
+    for (int i = 0; i < private_conversation_count; i++) {
+        if (private_conversations[i].active &&
+            private_conversations[i].user_a == canonical_first &&
+            private_conversations[i].user_b == canonical_second) {
+            return &private_conversations[i];
+        }
+    }
+    return nullptr;
+}
+
 // Indica si dos usuarios ya comparten una conversación privada activa.
 // Debe llamarse con clients_mutex ya tomado.
 static bool userHasPrivateChatWithMe(
@@ -377,18 +396,19 @@ static void* handleClient(void* raw_thread_arguments) {
                         trimLineBreaksAndSpaces(parsed_client_message.sender);
                         trimLineBreaksAndSpaces(parsed_client_message.target);
 
-                        PrivateConversation* private_conversation =
-                            findOrCreatePrivateConversation(
-                                parsed_client_message.sender,
-                                parsed_client_message.target
-                            );
+                        // Solo buscamos — no creamos. Si no existe la conversación,
+                        // simplemente no hay historial que devolver.
+                        PrivateConversation* private_conversation = findPrivateConversation(
+                            parsed_client_message.sender,
+                            parsed_client_message.target
+                        );
                         pthread_mutex_unlock(&clients_mutex);
 
                         if (private_conversation) {
                             pthread_mutex_lock(&private_conversation->mutex);
                             for (int message_index = 0;
-                                 message_index < private_conversation->message_count;
-                                 message_index++) {
+                                message_index < private_conversation->message_count;
+                                message_index++) {
                                 server_response_message += MessageSerializer::buildPrivateMessage(
                                     private_conversation->messages[message_index].sender,
                                     private_conversation->messages[message_index].target,

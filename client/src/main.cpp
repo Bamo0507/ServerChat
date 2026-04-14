@@ -270,13 +270,13 @@ int main() {
                     parts.push_back(current_part);
                 }
 
-                // PRIVATE_MSG|sender|target|content
                 if (parts.size() >= 4) {
                     std::string sender  = parts[1];
                     std::string content = parts[3];
 
-                    // Solo agregar si viene del otro usuario (el propio ya se añadió optimistamente)
-                    if (sender != current_username) {
+                    // En historial (GETPRIVATE): incluir TODO (enviados y recibidos).
+                    // En tiempo real: omitir los propios porque ya se agregaron optimistamente.
+                    if (awaiting_private_refresh || sender != current_username) {
                         refreshed_private_messages.push_back("/" + sender + " " + content);
                         contains_private_messages = true;
                     }
